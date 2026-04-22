@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ff4f9a" />
+    <link rel="manifest" href="/static/manifest.webmanifest" />
     <title>文件管理中心</title>
     <style>
         :root {
@@ -129,12 +131,24 @@
             text-align: center;
             color: #8f5472;
         }
+
+        .note {
+            margin: 0 0 12px;
+            background: #ffe9f3;
+            border: 2px solid var(--line);
+            padding: 10px 12px;
+            font-size: 13px;
+            color: #7d3f61;
+        }
     </style>
 </head>
 <body>
     <div class="wrap">
         <h1 class="title">文件管理中心</h1>
         <p class="desc">支持按文件名或上传时间排序，并支持按文件名关键词筛选。</p>
+        {% if shared_count > 0 %}
+        <div class="note">安卓分享已接收：{{ shared_count }} 个文件{% if failed_count > 0 %}，其中 {{ failed_count }} 个因格式或大小限制未保存{% endif %}。</div>
+        {% endif %}
 
         <div class="toolbar">
             <input id="keywordInput" type="text" placeholder="输入文件名关键词进行过滤" />
@@ -225,6 +239,14 @@
             toggleOrderBtn.textContent = nextOrder === "desc" ? "当前：倒序" : "当前：正序";
             refreshTable();
         });
+
+        if ("serviceWorker" in navigator) {
+            window.addEventListener("load", () => {
+                navigator.serviceWorker.register("/static/sw.js").catch((error) => {
+                    console.error("Service Worker 注册失败:", error);
+                });
+            });
+        }
 
         refreshTable();
     </script>
