@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>文件管理中心</title>
+    <style>
+        :root {
+            --bg: #fff5fa;
+            --panel: #ffe3ef;
+            --panel-strong: #ffc8df;
+            --text: #5a1f3d;
+            --line: #e09abf;
+            --accent: #ff4f9a;
+            --accent-dark: #c22667;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .wrap {
+            max-width: 980px;
+            margin: 28px auto;
+            padding: 0 16px;
+        }
+
+        .title {
+            margin: 0 0 12px;
+            font-size: 30px;
+            letter-spacing: 1px;
+        }
+
+        .desc {
+            margin: 0 0 20px;
+            color: #7d3f61;
+            font-size: 14px;
+        }
+
+        .toolbar {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 10px;
+            background: var(--panel);
+            border: 2px solid var(--line);
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        input[type="text"],
+        select,
+        button {
+            height: 40px;
+            border: 2px solid var(--line);
+            background: #fff;
+            padding: 0 10px;
+            font-size: 14px;
+            color: var(--text);
+            outline: none;
+        }
+
+        input[type="text"]:focus,
+        select:focus {
+            border-color: var(--accent-dark);
+        }
+
+        button {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent-dark);
+            cursor: pointer;
+            min-width: 112px;
+            font-weight: 600;
+        }
+
+        button:hover {
+            filter: brightness(0.95);
+        }
+
+        .table-wrap {
+            border: 2px solid var(--line);
+            background: #fff;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 680px;
+        }
+
+        th,
+        td {
+            border: 1px solid var(--line);
+            padding: 10px 12px;
+            text-align: left;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        th {
+            background: var(--panel-strong);
+            font-weight: 700;
+        }
+
+        tbody tr:nth-child(even) {
+            background: #fff8fc;
+        }
+
+        a.file-link {
+            color: var(--accent-dark);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        a.file-link:hover {
+            text-decoration: underline;
+        }
+
+        .empty {
+            padding: 16px;
+            text-align: center;
+            color: #8f5472;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1 class="title">文件管理中心</h1>
+        <p class="desc">支持按文件名或上传时间排序，并支持按文件名关键词筛选。</p>
+
+        <div class="toolbar">
+            <input id="keywordInput" type="text" placeholder="输入文件名关键词进行过滤" />
+            <select id="sortKey">
+                <option value="filename">按文件名排序</option>
+                <option value="uploaded_timestamp">按上传时间排序</option>
+            </select>
+            <button id="toggleOrderBtn" type="button" data-order="desc">当前：倒序</button>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>文件名</th>
+                        <th>大小</th>
+                        <th>上传时间</th>
+                    </tr>
+                </thead>
+                <tbody id="fileTableBody"></tbody>
+            </table>
+            <div id="emptyState" class="empty" style="display: none;">暂无匹配文件</div>
+        </div>
+    </div>
+
+    <script>
+        const rawFiles = {{ files|tojson }};
+        const bodyEl = document.getElementById("fileTableBody");
+        const emptyEl = document.getElementById("emptyState");
+        const keywordInput = document.getElementById("keywordInput");
+        const sortKeySelect = document.getElementById("sortKey");
+        const toggleOrderBtn = document.getElementById("toggleOrderBtn");
+
+        function sortFiles(files, sortKey, sortOrder) {
+            const sorted = [...files].sort((a, b) => {
+                if (sortKey === "filename") {
+                    return a.filename.localeCompare(b.filename, "zh-Hans-CN", { sensitivity: "base" });
+                }
+                return a.uploaded_timestamp - b.uploaded_timestamp;
+            });
+            if (sortOrder === "desc") {
+                sorted.reverse();
+            }
+            return sorted;
+        }
+
+        function filterFiles(files, keyword) {
+            if (!keyword) {
+                return files;
+            }
+            const lower = keyword.toLowerCase();
+            return files.filter((item) => item.filename.toLowerCase().includes(lower));
+        }
+
+        function renderRows(files) {
+            bodyEl.innerHTML = "";
+            if (!files.length) {
+                emptyEl.style.display = "block";
+                return;
+            }
+            emptyEl.style.display = "none";
+
+            files.forEach((item) => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td><a class="file-link" href="/files/${encodeURIComponent(item.filename)}">${item.filename}</a></td>
+                    <td>${item.size_text}</td>
+                    <td>${item.uploaded_time}</td>
+                `;
+                bodyEl.appendChild(tr);
+            });
+        }
+
+        function refreshTable() {
+            const keyword = keywordInput.value.trim();
+            const sortKey = sortKeySelect.value;
+            const sortOrder = toggleOrderBtn.dataset.order;
+            const filtered = filterFiles(rawFiles, keyword);
+            const sorted = sortFiles(filtered, sortKey, sortOrder);
+            renderRows(sorted);
+        }
+
+        keywordInput.addEventListener("input", refreshTable);
+        sortKeySelect.addEventListener("change", refreshTable);
+        toggleOrderBtn.addEventListener("click", () => {
+            const nextOrder = toggleOrderBtn.dataset.order === "desc" ? "asc" : "desc";
+            toggleOrderBtn.dataset.order = nextOrder;
+            toggleOrderBtn.textContent = nextOrder === "desc" ? "当前：倒序" : "当前：正序";
+            refreshTable();
+        });
+
+        refreshTable();
+    </script>
+</body>
+</html>
