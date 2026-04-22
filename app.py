@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
@@ -91,12 +91,52 @@ def resolve_ssl_cert_path() -> str:
     return SSL_CERT_PEM_PATH
 
 
+def save_incoming_file(file_storage):
+    if file_storage is None or not file_storage.filename:
+        raise ValueError("文件名不能为空")
+
+    if not allowed_file(file_storage.filename):
+        raise ValueError("文件类型不支持")
+
+    safe_name = secure_filename(file_storage.filename)
+    if not safe_name:
+        raise ValueError("文件名不合法")
+
+    save_name = safe_name
+    target_path = os.path.join(UPLOAD_DIR, save_name)
+    if os.path.exists(target_path):
+        stem, ext = os.path.splitext(safe_name)
+        save_name = f"{stem}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
+        target_path = os.path.join(UPLOAD_DIR, save_name)
+
+    file_storage.save(target_path)
+    file_size = os.path.getsize(target_path)
+    if file_size > MAX_FILE_SIZE:
+        os.remove(target_path)
+        raise ValueError("单文件大小不能超过 50MB")
+
+    uploaded_time = datetime.fromtimestamp(os.path.getmtime(target_path)).strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "filename": save_name,
+        "size_bytes": file_size,
+        "size_text": format_size(file_size),
+        "uploaded_time": uploaded_time,
+    }
+
+
 @app.before_request
 def verify_token():
     if request.method == "OPTIONS":
         return cors_preflight_response()
     if request.method == "GET" and request.path == "/":
         return None
+    if request.method == "GET" and request.path.startswith("/static/"):
+        return None
+    if request.method == "POST" and request.path == "/share-target":
+        share_token = request.args.get("token", "")
+        if share_token == API_TOKEN:
+            return None
+        return jsonify({"error": "Unauthorized", "message": "share token 无效或缺失"}), 401
     token = request.headers.get("X-Token")
     if token != API_TOKEN:
         return jsonify({"error": "Unauthorized", "message": "X-Token 无效或缺失"}), 401
@@ -129,7 +169,22 @@ def handle_exception(error):
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html", files=list_uploaded_files())
+    shared_count = request.args.get("shared", "0")
+    failed_count = request.args.get("failed", "0")
+    try:
+        shared_count = int(shared_count)
+    except ValueError:
+        shared_count = 0
+    try:
+        failed_count = int(failed_count)
+    except ValueError:
+        failed_count = 0
+    return render_template(
+        "index.html",
+        files=list_uploaded_files(),
+        shared_count=shared_count,
+        failed_count=failed_count,
+    )
 
 
 @app.route("/upload-share", methods=["POST", "OPTIONS"])
@@ -145,35 +200,22 @@ def upload_share():
         first_key = next(iter(request.files.keys()))
         file_storage = request.files.get(first_key)
 
-    if file_storage is None or not file_storage.filename:
-        return jsonify({"error": "Bad Request", "message": "文件名不能为空"}), 400
-
-    if not allowed_file(file_storage.filename):
-        return jsonify({"error": "Bad Request", "message": "文件类型不支持"}), 400
-
-    safe_name = secure_filename(file_storage.filename)
-    if not safe_name:
-        return jsonify({"error": "Bad Request", "message": "文件名不合法"}), 400
-
-    save_name = safe_name
-    target_path = os.path.join(UPLOAD_DIR, save_name)
-    if os.path.exists(target_path):
-        stem, ext = os.path.splitext(safe_name)
-        save_name = f"{stem}_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
-        target_path = os.path.join(UPLOAD_DIR, save_name)
-
-    file_storage.save(target_path)
-    file_size = os.path.getsize(target_path)
-    uploaded_time = datetime.fromtimestamp(os.path.getmtime(target_path)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        saved_file = save_incoming_file(file_storage)
+    except ValueError as exc:
+        message = str(exc)
+        if "50MB" in message:
+            return jsonify({"error": "File Too Large", "message": message}), 413
+        return jsonify({"error": "Bad Request", "message": message}), 400
 
     return (
         jsonify(
             {
                 "message": "上传成功",
-                "filename": save_name,
-                "size_bytes": file_size,
-                "size_text": format_size(file_size),
-                "uploaded_time": uploaded_time,
+                "filename": saved_file["filename"],
+                "size_bytes": saved_file["size_bytes"],
+                "size_text": saved_file["size_text"],
+                "uploaded_time": saved_file["uploaded_time"],
             }
         ),
         201,
@@ -219,6 +261,34 @@ def delit():
 
     os.remove(file_path)
     return jsonify({"message": "删除成功", "filename": safe_name}), 200
+
+
+@app.route("/share-target", methods=["POST", "OPTIONS"])
+def share_target():
+    if request.method == "OPTIONS":
+        return cors_preflight_response()
+
+    shared_files = request.files.getlist("share_files")
+    if not shared_files:
+        shared_files = list(request.files.values())
+    if not shared_files:
+        return jsonify({"error": "Bad Request", "message": "未接收到分享文件"}), 400
+
+    saved_files = []
+    failed_count = 0
+    for file_storage in shared_files:
+        try:
+            saved_file = save_incoming_file(file_storage)
+            saved_files.append(saved_file["filename"])
+        except ValueError:
+            failed_count += 1
+
+    if not saved_files:
+        return jsonify({"error": "Bad Request", "message": "未保存任何合法文件"}), 400
+
+    if failed_count > 0:
+        return redirect(url_for("index", shared=len(saved_files), failed=failed_count))
+    return redirect(url_for("index", shared=len(saved_files)))
 
 
 if __name__ == "__main__":
